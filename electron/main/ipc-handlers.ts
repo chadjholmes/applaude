@@ -61,7 +61,7 @@ export function setupIpcHandlers(
     return session
   })
 
-  ipcMain.handle('session:sendMessage', (_, { sessionId, message }: { sessionId: string; message: string }) => {
+  ipcMain.handle('session:sendMessage', (_, { sessionId, message, images }: { sessionId: string; message: string; images?: { data: string; name: string }[] }) => {
     const session = sessionStore.getSession(sessionId)
     if (!session) throw new Error(`Session ${sessionId} not found`)
 
@@ -69,13 +69,32 @@ export function setupIpcHandlers(
     const isFirstMessage = !session.cliSessionId
     const cliSessionId = session.cliSessionId || uuidv4()
 
+    // Build prompt with image references if any
+    // For now, save images to temp files and reference them in the prompt
+    let finalPrompt = message
+    if (images && images.length > 0) {
+      const tempDir = os.tmpdir()
+      const imagePaths: string[] = []
+
+      for (const img of images) {
+        const imgPath = path.join(tempDir, `applaude-img-${Date.now()}-${img.name}`)
+        const buffer = Buffer.from(img.data, 'base64')
+        fs.writeFileSync(imgPath, buffer)
+        imagePaths.push(imgPath)
+      }
+
+      // Prepend image paths to the prompt
+      const imageRefs = imagePaths.map((p) => `@${p}`).join(' ')
+      finalPrompt = `${imageRefs}\n\n${message}`
+    }
+
     // Start a new process for this message (uses same CLI session for continuity)
     const processId = claudeManager.startSession({
       cwd: session.cwd,
       sessionId: session.id,
       cliSessionId,
       isFirstMessage,
-      prompt: message,
+      prompt: finalPrompt,
     })
 
     session.processId = processId

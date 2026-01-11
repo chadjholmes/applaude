@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { ArrowUp, Square, Zap, FileText, Wand2 } from 'lucide-react'
-import { useSessionStore } from '../../stores/sessionStore'
+import { ArrowUp, Square, Zap, FileText, Wand2, Clock, Image, X, Paperclip } from 'lucide-react'
+import { useSessionStore, type ImageAttachment } from '../../stores/sessionStore'
 import { MentionAutocomplete } from './MentionAutocomplete'
 import { SlashCommandAutocomplete } from './SlashCommandAutocomplete'
 
@@ -25,17 +25,95 @@ export function MessageInput() {
     isOpen: boolean
     query: string
   } | null>(null)
+  const [images, setImages] = useState<ImageAttachment[]>([])
+  const [isDragging, setIsDragging] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const session = useSessionStore((s) =>
     activeSessionId ? s.sessions[activeSessionId] : null
   )
   const sendMessage = useSessionStore((s) => s.sendMessage)
+  const queueMessage = useSessionStore((s) => s.queueMessage)
+  const clearQueuedMessage = useSessionStore((s) => s.clearQueuedMessage)
 
   const isRunning = session?.state === 'running'
-  const canSend = !isRunning && input.trim()
+  const hasQueuedMessage = !!session?.queuedMessage
+  const canSend = input.trim() || images.length > 0
+
+  // Clean up image preview URLs when component unmounts or images change
+  useEffect(() => {
+    return () => {
+      images.forEach((img) => URL.revokeObjectURL(img.previewUrl))
+    }
+  }, [])
+
+  const addImages = useCallback((files: FileList | File[]) => {
+    const imageFiles = Array.from(files).filter((file) =>
+      file.type.startsWith('image/')
+    )
+
+    const newImages: ImageAttachment[] = imageFiles.map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      previewUrl: URL.createObjectURL(file),
+      name: file.name,
+    }))
+
+    setImages((prev) => [...prev, ...newImages])
+  }, [])
+
+  const removeImage = useCallback((id: string) => {
+    setImages((prev) => {
+      const img = prev.find((i) => i.id === id)
+      if (img) URL.revokeObjectURL(img.previewUrl)
+      return prev.filter((i) => i.id !== id)
+    })
+  }, [])
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items
+    if (!items) return
+
+    const imageItems = Array.from(items).filter((item) =>
+      item.type.startsWith('image/')
+    )
+
+    if (imageItems.length > 0) {
+      e.preventDefault()
+      const files = imageItems
+        .map((item) => item.getAsFile())
+        .filter((f): f is File => f !== null)
+      addImages(files)
+    }
+  }, [addImages])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDragging(true)
+    }
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+
+    const files = e.dataTransfer.files
+    if (files.length > 0) {
+      addImages(files)
+    }
+  }, [addImages])
 
   // Auto-resize textarea
   useEffect(() => {
@@ -128,9 +206,20 @@ export function MessageInput() {
     if (!canSend || !session) return
 
     const message = input.trim()
+    const imagesToSend = [...images]
+
+    // Clear input and images immediately
     setInput('')
+    setImages([])
     setMentionState(null)
-    await sendMessage(session.id, message)
+
+    // If running, queue the message instead
+    if (isRunning) {
+      queueMessage(session.id, message)
+      return
+    }
+
+    await sendMessage(session.id, message, imagesToSend.length > 0 ? imagesToSend : undefined)
   }
 
   const handleStop = async () => {
@@ -173,10 +262,41 @@ export function MessageInput() {
   return (
     <div className="border-t border-neutral-800/50 p-4 flex-shrink-0 bg-neutral-950/50">
       <div className="max-w-3xl mx-auto">
+        {/* Queued message indicator */}
+        {hasQueuedMessage && (
+          <div className="mb-2 px-3 py-2 bg-amber-900/20 border border-amber-700/30 rounded-lg flex items-center gap-2">
+            <Clock className="w-4 h-4 text-amber-500" />
+            <span className="text-sm text-amber-400">Message queued - will send when agent finishes</span>
+            <button
+              onClick={() => clearQueuedMessage(session.id)}
+              className="ml-auto text-neutral-500 hover:text-neutral-300"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         <div
           ref={containerRef}
-          className="relative bg-neutral-900 rounded-2xl border border-neutral-800/50 focus-within:border-neutral-700 transition-colors"
+          className={`relative bg-neutral-900 rounded-2xl border transition-colors ${
+            isDragging
+              ? 'border-blue-500 bg-blue-500/10'
+              : 'border-neutral-800/50 focus-within:border-neutral-700'
+          }`}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
         >
+          {/* Drag overlay */}
+          {isDragging && (
+            <div className="absolute inset-0 flex items-center justify-center bg-blue-500/10 rounded-2xl z-10 pointer-events-none">
+              <div className="flex items-center gap-2 text-blue-400">
+                <Image className="w-5 h-5" />
+                <span>Drop images here</span>
+              </div>
+            </div>
+          )}
+
           {/* Mention autocomplete */}
           {mentionState?.isOpen && session && (
             <MentionAutocomplete
@@ -197,8 +317,33 @@ export function MessageInput() {
             />
           )}
 
+          {/* Image previews */}
+          {images.length > 0 && (
+            <div className="flex gap-2 p-2 pt-3 pl-3 flex-wrap">
+              {images.map((img) => (
+                <div
+                  key={img.id}
+                  className="relative group w-16 h-16 rounded-lg overflow-hidden bg-neutral-800"
+                >
+                  <img
+                    src={img.previewUrl}
+                    alt={img.name}
+                    className="w-full h-full object-cover"
+                  />
+                  <button
+                    onClick={() => removeImage(img.id)}
+                    className="absolute top-0.5 right-0.5 p-0.5 bg-neutral-900/80 rounded-full
+                               opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <X className="w-3 h-3 text-neutral-300" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Mode indicator */}
-          <div className="absolute left-3 top-3">
+          <div className={`absolute left-3 ${images.length > 0 ? 'top-[76px]' : 'top-3'}`}>
             <button
               onClick={cycleMode}
               className="flex items-center gap-1.5 px-2 py-0.5 bg-neutral-800/80 hover:bg-neutral-700/80
@@ -218,22 +363,46 @@ export function MessageInput() {
             </button>
           </div>
 
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files) {
+                addImages(e.target.files)
+                e.target.value = ''
+              }
+            }}
+          />
+
           <textarea
             ref={textareaRef}
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder={isRunning ? 'Waiting for response...' : 'Message Claude... (@ for files, / for commands)'}
-            disabled={isRunning}
-            className="input-scrollbar w-full bg-transparent pl-4 pt-9 pb-3 pr-14
+            onPaste={handlePaste}
+            placeholder={isRunning ? 'Type to queue message...' : 'Message Claude... (@ for files, / for commands)'}
+            className={`input-scrollbar w-full bg-transparent pl-4 pb-3 pr-14
                        text-neutral-100 placeholder-neutral-500 resize-none
                        focus:outline-none
-                       disabled:opacity-50 disabled:cursor-not-allowed
-                       min-h-[56px] max-h-[200px]"
+                       min-h-[56px] max-h-[200px]
+                       ${images.length > 0 ? 'pt-3' : 'pt-9'}`}
             rows={1}
           />
 
-          <div className="absolute right-2 bottom-2">
+          <div className="absolute right-2 bottom-2 flex items-center gap-1">
+            {/* Attach button */}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="p-2 text-neutral-500 hover:text-neutral-300 transition-colors"
+              title="Attach images"
+            >
+              <Paperclip className="w-4 h-4" />
+            </button>
+
             {isRunning ? (
               <button
                 onClick={handleStop}

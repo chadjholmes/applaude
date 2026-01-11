@@ -89,8 +89,8 @@ const api = {
     get: (id: string): Promise<SessionData | null> => ipcRenderer.invoke('session:get', id),
     create: (options: { cwd?: string; title?: string; prompt?: string }): Promise<SessionData> =>
       ipcRenderer.invoke('session:create', options),
-    sendMessage: (sessionId: string, message: string): Promise<{ processId: string }> =>
-      ipcRenderer.invoke('session:sendMessage', { sessionId, message }),
+    sendMessage: (sessionId: string, message: string, images?: { data: string; name: string }[]): Promise<{ processId: string }> =>
+      ipcRenderer.invoke('session:sendMessage', { sessionId, message, images }),
     resume: (id: string): Promise<SessionData> => ipcRenderer.invoke('session:resume', id),
     delete: (id: string): Promise<void> => ipcRenderer.invoke('session:delete', id),
     setActive: (id: string | null): Promise<void> => ipcRenderer.invoke('session:setActive', id),

@@ -16,6 +16,14 @@ import {
   type AskUserQuestionInput,
 } from '../types/claude'
 
+// Image attachment from the renderer
+export interface ImageAttachment {
+  id: string
+  file: File
+  previewUrl: string
+  name: string
+}
+
 interface SessionState {
   sessions: Record<string, Session>
   folders: Record<string, SessionFolder>
@@ -27,7 +35,7 @@ interface SessionState {
   loadSessions: () => Promise<void>
   loadFolders: () => Promise<void>
   createSession: (cwd?: string, title?: string, folderId?: string) => Promise<Session>
-  sendMessage: (sessionId: string, message: string) => Promise<void>
+  sendMessage: (sessionId: string, message: string, images?: ImageAttachment[]) => Promise<void>
   deleteSession: (id: string) => Promise<void>
   setActiveSession: (id: string | null) => void
   updateSessionTitle: (id: string, title: string) => Promise<void>
@@ -42,6 +50,10 @@ interface SessionState {
   // Interactive responses
   respondToPermission: (sessionId: string, allow: boolean) => Promise<void>
   respondToInput: (sessionId: string, value: string) => Promise<void>
+
+  // Queued messages
+  queueMessage: (sessionId: string, message: string) => void
+  clearQueuedMessage: (sessionId: string) => void
 
   // Folder management
   createFolder: (name: string, defaultCwd?: string) => Promise<SessionFolder>
@@ -118,7 +130,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     return fullSession
   },
 
-  sendMessage: async (sessionId, message) => {
+  sendMessage: async (sessionId, message, images) => {
     const session = get().sessions[sessionId]
     if (!session) return
 
@@ -134,17 +146,39 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       get().updateSessionTitle(sessionId, autoTitle)
     }
 
+    // Convert images to base64 for sending to backend
+    let imageData: { data: string; name: string }[] | undefined
+    if (images && images.length > 0) {
+      imageData = await Promise.all(
+        images.map(async (img) => {
+          const buffer = await img.file.arrayBuffer()
+          const base64 = btoa(
+            new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+          )
+          return {
+            data: base64,
+            name: img.name,
+          }
+        })
+      )
+    }
+
+    // Build display text for user message (include image count if any)
+    const displayText = images && images.length > 0
+      ? `${message}${message ? '\n' : ''}[${images.length} image${images.length > 1 ? 's' : ''} attached]`
+      : message
+
     // Add user message to local state immediately
     const userMessage: Message = {
       id: uuidv4(),
       timestamp: new Date().toISOString(),
       type: 'user',
-      raw: { type: 'user_input', content: message },
+      raw: { type: 'user_input', content: message, imageCount: images?.length || 0 },
       contentBlocks: [
         {
           id: uuidv4(),
           type: 'text',
-          content: { type: 'text', text: message },
+          content: { type: 'text', text: displayText },
           isExpanded: true,
         },
       ],
@@ -171,7 +205,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     })
 
     // Send to backend
-    const { processId } = await window.applaude.session.sendMessage(sessionId, message)
+    const { processId } = await window.applaude.session.sendMessage(sessionId, message, imageData)
 
     set((state) => ({
       sessions: {
@@ -237,28 +271,38 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   handleProcessExit: (sessionId) => {
-    set((state) => {
-      const session = state.sessions[sessionId]
-      if (!session) return state
+    const session = get().sessions[sessionId]
+    if (!session) return
 
-      // Keep waiting_input state if there's a pending question
-      const newState = session.pendingQuestion ? 'waiting_input' : 'idle'
+    // Keep waiting_input state if there's a pending question
+    const newState = session.pendingQuestion ? 'waiting_input' : 'idle'
 
-      return {
-        sessions: {
-          ...state.sessions,
-          [sessionId]: {
-            ...session,
-            state: newState,
-            processId: undefined,
-          },
+    // Check for queued message before updating state
+    const queuedMessage = session.queuedMessage
+
+    set((state) => ({
+      sessions: {
+        ...state.sessions,
+        [sessionId]: {
+          ...state.sessions[sessionId],
+          state: newState,
+          processId: undefined,
+          queuedMessage: undefined, // Clear queued message
         },
-        streamBuffers: {
-          ...state.streamBuffers,
-          [sessionId]: '',
-        },
-      }
-    })
+      },
+      streamBuffers: {
+        ...state.streamBuffers,
+        [sessionId]: '',
+      },
+    }))
+
+    // Auto-send queued message if there was one and no pending question
+    if (queuedMessage && !session.pendingQuestion) {
+      // Small delay to ensure state is updated before sending
+      setTimeout(() => {
+        get().sendMessage(sessionId, queuedMessage)
+      }, 100)
+    }
   },
 
   toggleContentExpansion: (sessionId, messageId, blockId) => {
@@ -317,6 +361,30 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         [sessionId]: {
           ...state.sessions[sessionId],
           state: 'running',
+        },
+      },
+    }))
+  },
+
+  queueMessage: (sessionId, message) => {
+    set((state) => ({
+      sessions: {
+        ...state.sessions,
+        [sessionId]: {
+          ...state.sessions[sessionId],
+          queuedMessage: message,
+        },
+      },
+    }))
+  },
+
+  clearQueuedMessage: (sessionId) => {
+    set((state) => ({
+      sessions: {
+        ...state.sessions,
+        [sessionId]: {
+          ...state.sessions[sessionId],
+          queuedMessage: undefined,
         },
       },
     }))

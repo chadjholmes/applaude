@@ -47,6 +47,7 @@ export interface Session {
   todos: TodoItem[]
   state: 'idle' | 'running' | 'waiting_input' | 'waiting_permission'
   pendingQuestion?: PendingQuestion  // For AskUserQuestion tool calls
+  queuedMessage?: string  // Message queued during agent turn
   createdAt: string
   updatedAt: string
   metadata: {
