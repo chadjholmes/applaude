@@ -80,11 +80,10 @@ export class ClaudeProcessManager extends EventEmitter {
       '--verbose',
     ]
 
-    // For first message, just set session ID
-    // For subsequent messages, use --continue to resume the conversation
-    if (options.isFirstMessage) {
-      args.push('--session-id', options.cliSessionId)
-    } else {
+    // Always pass the session ID to ensure session isolation
+    // Use --continue for subsequent messages to resume the specific conversation
+    args.push('--session-id', options.cliSessionId)
+    if (!options.isFirstMessage) {
       args.push('--continue')
     }
 
