@@ -431,6 +431,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         },
       }
     })
+
+    // Persist to backend
+    window.applaude.session.updateFolder(sessionId, folderId)
   },
 }))
 

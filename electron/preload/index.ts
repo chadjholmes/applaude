@@ -100,6 +100,8 @@ const api = {
       ipcRenderer.invoke('session:appendMessage', { sessionId, message }),
     updateState: (sessionId: string, state: SessionData['state']): Promise<void> =>
       ipcRenderer.invoke('session:updateState', { sessionId, state }),
+    updateFolder: (sessionId: string, folderId: string | null): Promise<void> =>
+      ipcRenderer.invoke('session:updateFolder', { sessionId, folderId }),
   },
 
   // Process control

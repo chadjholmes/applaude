@@ -137,6 +137,10 @@ export function setupIpcHandlers(
     sessionStore.updateSession(sessionId, { state })
   })
 
+  ipcMain.handle('session:updateFolder', (_, { sessionId, folderId }: { sessionId: string; folderId: string | null }) => {
+    sessionStore.updateSession(sessionId, { folderId: folderId || undefined })
+  })
+
   // ============ Folder Management ============
 
   ipcMain.handle('folder:getAll', () => {
